@@ -14,7 +14,7 @@ It supports VASP-like `ISIF` modes (0–7), Phonopy-compatible `vasprun.xml` out
 - **VASP ISIF-compatible** relaxation modes (0–7)
 - **Phonopy-compatible** `vasprun.xml` generation
 - **Batch processing** for multiple structures (e.g., `POSCAR-*`)
-- Automatic generation of **log files** and **PDF energy/force plots**
+- Automatic generation of **log files** and **PDF energy/force plots** (can be disabled with `--no-logs`)
 - Supports **fixed-axis relaxation** via `--fix-axis a,b,c`
 - Compatible with ASE ≥ 3.20, Python ≥ 3.8
 
@@ -31,6 +31,8 @@ vasprun-POSCAR-001.xml
 relax-POSCAR-001_log.txt
 relax-POSCAR-001_log.pdf
 ```
+
+> Use `--no-logs` to suppress creation of `relax-*_log.txt` and `relax-*_log.pdf`.
 
 ---
 
@@ -51,6 +53,9 @@ python mace_ase_relax.py -i POSCAR --isif 3 --fix-axis a
 
 # Single-point calculation
 python mace_ase_relax.py -i POSCAR --isif 0
+
+# Disable TXT/PDF logs
+python mace_ase_relax.py -i POSCAR --no-logs
 ```
 
 ---
@@ -58,14 +63,15 @@ python mace_ase_relax.py -i POSCAR --isif 0
 ## Command Line Options
 
 | Option | Description | Default |
-|--------|--------------|----------|
+|--------|-------------|---------|
 | `-i`, `--input` | Input file(s) or pattern (e.g., `POSCAR-*`) | `POSCAR` |
 | `--isif` | VASP ISIF mode (0–7) | 2 |
 | `--fmax` | Force convergence threshold (eV/Å) | 0.01 |
 | `--smax` | Stress convergence threshold (eV/Å³) | 0.001 |
 | `--device` | Calculation device (`cpu` or `cuda`) | `cpu` |
-| `--fix-axis` | Fix lattice axes during relaxation (comma-separated) | None |
+| `--fix-axis` | Fix lattice axes during relaxation (comma-separated, e.g., `a` or `a,c`) | None |
 | `--quiet` | Suppress detailed output | False |
+| `--no-logs` | Do not write `relax-*_log.txt` and `relax-*_log.pdf` | False |
 
 ---
 
@@ -93,6 +99,14 @@ def get_mace_calculator(device="cpu"):
     )
 ```
 
+### 🔗 Pretrained models
+
+You can find pretrained **MACE foundations/models** and checkpoints in the **ACEsuit/mace-foundations** repository:  
+<https://github.com/ACEsuit/mace-foundations>
+
+For example, models like `2023-12-03-mace-128-L1_epoch-199.model` can be sourced from releases or training artifacts referenced there.  
+(Adjust the `model_path` accordingly to your local copy.)
+
 ---
 
 ## Log and Visualization
@@ -100,5 +114,35 @@ def get_mace_calculator(device="cpu"):
 - `relax-*_log.txt` → text log (energy, forces, stress per step)  
 - `relax-*_log.pdf` → plotted energy/force/stress convergence  
 - `vasprun-*.xml` → phonopy-compatible XML output  
+- Add `--no-logs` to disable the TXT/PDF outputs and keep stdout-only logging.
+
+---
+
+## Training data
+
+If you are using models trained on the **MPtrj** dataset, please cite the following paper:
+
+```
+@article{deng2023chgnet,
+      title={CHGNet: Pretrained universal neural network potential for charge-informed atomistic modeling},
+      author={Bowen Deng and Peichen Zhong and KyuJung Jun and Janosh Riebesell and Kevin Han and Christopher J. Bartel and Gerbrand Ceder},
+      year={2023},
+      eprint={2302.14231},
+      archivePrefix={arXiv},
+      primaryClass={cond-mat.mtrl-sci}
+}
+```
+
+The MPtrj dataset and related resources are linked from the CHGNet project pages.
+
+> If you redistribute or publish results produced using this script and a pretrained MACE model, please make sure to cite the **MACE** method and any **datasets/models** you rely on (e.g., CHGNet/MPtrj, mace-foundations).
+
+---
+
+## Notes
+
+- `vasprun-*.xml` is a **minimal** VASP-like XML that Phonopy can parse for forces/energies.  
+- `--fix-axis` accepts any subset of `{a,b,c}` (e.g., `a`, `b,c`) when using cell filters (`ISIF≥3`).  
+- For batch runs, the script writes **per-input** outputs with the input file name appended.
 
 ---
