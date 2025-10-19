@@ -4,17 +4,13 @@
 seekpath2bandconf.py
 Make phonopy band.conf directly from POSCAR using SeeK-path (no VASPKIT needed).
 
-What it does
 - Robust POSCAR parser (VASP4/5, Selective dynamics, Direct/Cartesian)
 - POSCAR -> SeeK-path standard k-path (continuous chain)
-- phonopy_disp.yaml -> DIM
+- DIM: from --dim "a b c" (highest priority) or phonopy_disp.yaml if present; otherwise blank
 - BAND: single line, one k-point per node (junctions deduped)
 - BAND_LABELS: cleaned (GAMMA->GM by default, underscores removed)
 - ATOM_NAME override: --atom-names "K Zr P O" or --rename "Na=K"
-- Prints a concise summary to terminal:
-  (1) POSCAR path (used file)
-  (2) Space group (International symbol & number)
-  (3) Q-point chain (labels) and coordinates in reciprocal crystal units
+- Summary print: POSCAR used, space group, q-path & coords, DIM source
 
 Usage
   pip install seekpath spglib
@@ -24,6 +20,7 @@ Usage
   #   --rename "Na=K"
   #   --gamma "Γ"
   #   --symprec 1e-5
+  #   --dim "3 3 3"
   #   --no-defaults
 """
 
@@ -88,7 +85,6 @@ def read_poscar(poscar_path: Path):
             raise ValueError("POSCAR: missing counts line after symbols")
         counts = [int(x) for x in raw[i].split()]
         i = next_nonempty(i+1)
-        # align symbols with counts
         if len(symbols) != len(counts):
             if len(symbols) > len(counts):
                 symbols = symbols[:len(counts)]
@@ -161,6 +157,13 @@ def read_poscar(poscar_path: Path):
 # ------------------------- phonopy_disp.yaml -> DIM -------------------------
 
 def read_dim_from_yaml(yaml_path: Path):
+    """Return [a,b,c] or None if not found or file missing."""
+    try:
+        return _read_dim_yaml_inner(yaml_path)
+    except FileNotFoundError:
+        return None
+
+def _read_dim_yaml_inner(yaml_path: Path):
     dim = None
     pat_dim = re.compile(r'^\s*dim:\s*"([^"]+)"\s*$', re.IGNORECASE)
     pat_row = re.compile(r'^\s*-\s*\[\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\]\s*$')
@@ -198,9 +201,7 @@ def read_dim_from_yaml(yaml_path: Path):
             dim = [max(1, int(round(math.sqrt(sum(c*c for c in r))))) for r in rows[:3]]
             print("[WARN] Non-diagonal supercell_matrix; approximated DIM =", dim)
 
-    if dim is None:
-        raise ValueError("DIM not found in phonopy_disp.yaml")
-    return dim
+    return dim  # may be None
 
 
 # ------------------------- helpers -------------------------
@@ -245,7 +246,7 @@ def band_points_one_line_from_seekpath(path_data, gamma_label="GM"):
     labels = [_clean_label(x, gamma_label) for x in chain]
     pts = [f"{_fmt(pc[lab][0])} {_fmt(pc[lab][1])} {_fmt(pc[lab][2])}" for lab in chain]
     band_line = "BAND = " + "    ".join(pts)
-    return band_line, labels, chain  # chain: raw labels for printing summary
+    return band_line, labels, chain  # chain: raw labels for summary
 
 
 # ------------------------- atom-name override -------------------------
@@ -267,8 +268,7 @@ def parse_atom_override(args, symbols_from_poscar):
 
 # ------------------------- pretty summary -------------------------
 
-def print_summary(poscar_path: Path, path_data, chain_labels, gamma_cleaned_labels):
-    # POSCAR used
+def print_summary(poscar_path: Path, path_data, chain_labels, gamma_cleaned_labels, dim, dim_source):
     try:
         poscar_disp = str(poscar_path.resolve())
     except Exception:
@@ -281,15 +281,19 @@ def print_summary(poscar_path: Path, path_data, chain_labels, gamma_cleaned_labe
     print("------------------------------------------------------------")
     print(f"[Seekpath] POSCAR: {poscar_disp}")
     print(f"[Seekpath] Space group: {sg_int} (No.{sg_no}), Bravais: {bravais}")
-    # label chain (cleaned)
     print(f"[Seekpath] Q-path (labels): {' - '.join(gamma_cleaned_labels)}")
-    # coordinates table
     print("[Seekpath] Q-points (reciprocal crystal units):")
     pc = path_data["point_coords"]
     for raw_lab, clean_lab in zip(chain_labels, gamma_cleaned_labels):
         k = pc[raw_lab]
         print(f"  {clean_lab:>4s} : {_fmt(k[0])}  {_fmt(k[1])}  {_fmt(k[2])}")
     print(f"[Seekpath] Total q-points: {len(chain_labels)}")
+
+    if dim is None:
+        print("[Info] DIM not set (no phonopy_disp.yaml). The output band.conf will contain 'DIM =' (blank).")
+        print("       Provide --yaml phonopy_disp.yaml or use --dim \"a b c\" to set it explicitly.")
+    else:
+        print(f"[Seekpath] DIM = {dim[0]} {dim[1]} {dim[2]}  (source: {dim_source})")
     print("------------------------------------------------------------")
 
 
@@ -302,30 +306,51 @@ def main():
     ap.add_argument("--out", default="band.conf", type=Path)
     ap.add_argument("--gamma", default="GM", help="Gamma label for BAND_LABELS (e.g., GM or Γ)")
     ap.add_argument("--symprec", type=float, default=1e-5, help="Symmetry tolerance passed to SeeK-path (default: 1e-5)")
+    ap.add_argument("--dim", default=None, help='Override DIM as a string "a b c" (e.g., "3 3 3")')
     ap.add_argument("--no-defaults", action="store_true")
     ap.add_argument("--atom-names", default=None, help='Override ATOM_NAME, e.g. "K Zr P O"')
     ap.add_argument("--rename", default=None, help='Rename mapping, e.g. "Na=K,Zr=Zr"')
     args = ap.parse_args()
 
+    # POSCAR -> cell
     pos = read_poscar(args.poscar)
     atom_names = parse_atom_override(args, pos["symbols"])
-
     lattice, positions, numbers = pos["lattice"], pos["frac"], pos["kinds"]
     cell = (lattice, positions, numbers)
 
+    # SeeK-path (with symprec)
     import seekpath
-    # pass symprec to SeeK-path
     path_data = seekpath.get_path(cell, symprec=args.symprec)
 
     band_line, labels, chain_raw = band_points_one_line_from_seekpath(path_data, gamma_label=args.gamma)
-    dim = read_dim_from_yaml(args.yaml)
 
+    # DIM priority: --dim > --yaml (if exists) > None (blank)
+    dim = None
+    dim_source = None
+    if args.dim:
+        parts = args.dim.split()
+        if len(parts) == 3 and all(p.lstrip("-").isdigit() for p in parts):
+            dim = [int(p) for p in parts]
+            dim_source = "--dim"
+        else:
+            print("[WARN] --dim must be like: --dim \"3 3 3\"; ignoring it.")
+    if dim is None:
+        if args.yaml and Path(args.yaml).exists():
+            dim = read_dim_from_yaml(Path(args.yaml))
+            dim_source = "phonopy_disp.yaml" if dim is not None else None
+        else:
+            dim = None
+
+    # Write band.conf
     out_lines = []
     if atom_names:
         out_lines.append(f"ATOM_NAME = {' '.join(atom_names)}")
     else:
         out_lines.append("ATOM_NAME =")
-    out_lines.append(f"DIM = {dim[0]} {dim[1]} {dim[2]}")
+    if dim is None:
+        out_lines.append("DIM =")  # leave blank as requested
+    else:
+        out_lines.append(f"DIM = {dim[0]} {dim[1]} {dim[2]}")
     out_lines.append(band_line)
     out_lines.append(f"BAND_LABELS = {' '.join(labels)}")
     if not args.no_defaults:
@@ -333,11 +358,11 @@ def main():
         out_lines.append("FC_SYMMETRY = .TRUE.")
         out_lines.append("EIGENVECTORS = .TRUE.")
 
-    args.out.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    Path(args.out).write_text("\n".join(out_lines) + "\n", encoding="utf-8")
     print(f"[OK] Wrote {args.out}")
 
-    # Pretty summary
-    print_summary(args.poscar, path_data, chain_raw, labels)
+    # Summary
+    print_summary(args.poscar, path_data, chain_raw, labels, dim, dim_source)
 
 
 if __name__ == "__main__":
