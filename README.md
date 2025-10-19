@@ -1,4 +1,4 @@
-# 🧊 mace_ase_relax.py
+# mace_ase_relax.py
 
 **Automated structure relaxation and single-point calculations using MACE + ASE**
 
@@ -7,16 +7,16 @@ It supports VASP-like `ISIF` modes (0–7), Phonopy-compatible `vasprun.xml` out
 
 ---
 
-## ✨ Features
+## Features
 
-- 🧠 Uses **MACE** as the interatomic potential calculator
-- ⚙️ ASE **FIRE optimizer** for geometry relaxation
-- 🧩 **VASP ISIF-compatible** relaxation modes (0–7)
-- 📦 **Phonopy-compatible** `vasprun.xml` generation
-- 🔁 **Batch processing** for multiple structures (e.g., `POSCAR-*`)
-- 📈 Automatic generation of **log files** and **PDF energy/force plots**
-- 🧱 Supports **fixed-axis relaxation** via `--fix-axis a,b,c`
-- ✅ Compatible with ASE ≥ 3.20, Python ≥ 3.8
+- Uses **MACE** as the interatomic potential calculator
+- ASE **FIRE optimizer** for geometry relaxation
+- **VASP ISIF-compatible** relaxation modes (0–7)
+- **Phonopy-compatible** `vasprun.xml` generation
+- **Batch processing** for multiple structures (e.g., `POSCAR-*`)
+- Automatic generation of **log files** and **PDF energy/force plots**
+- Supports **fixed-axis relaxation** via `--fix-axis a,b,c`
+- Compatible with ASE ≥ 3.20, Python ≥ 3.8
 
 ---
 
@@ -34,7 +34,7 @@ relax-POSCAR-001_log.pdf
 
 ---
 
-## 🚀 Usage
+## Usage
 
 ```bash
 # Standard atomic relaxation (ISIF=2: atomic positions only)
@@ -55,7 +55,7 @@ python mace_ase_relax.py -i POSCAR --isif 0
 
 ---
 
-## ⚙️ Command Line Options
+## Command Line Options
 
 | Option | Description | Default |
 |--------|--------------|----------|
@@ -69,7 +69,7 @@ python mace_ase_relax.py -i POSCAR --isif 0
 
 ---
 
-## 🧩 Dependencies
+## Dependencies
 
 - Python ≥ 3.8  
 - ASE ≥ 3.20  
@@ -79,7 +79,7 @@ python mace_ase_relax.py -i POSCAR --isif 0
 
 ---
 
-## 🧠 Model Configuration
+## Model Configuration
 
 Edit the MACE model path in the script:
 
@@ -95,7 +95,7 @@ def get_mace_calculator(device="cpu"):
 
 ---
 
-## 📊 Log and Visualization
+## Log and Visualization
 
 - `relax-*_log.txt` → text log (energy, forces, stress per step)  
 - `relax-*_log.pdf` → plotted energy/force/stress convergence  
