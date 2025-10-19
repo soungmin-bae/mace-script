@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 def get_mace_calculator(device="cpu"):
     from mace.calculators import MACECalculator
     return MACECalculator(
-        model_path="/Users/bama/Desktop/data/code/MACE/models/2023-12-03-mace-128-L1_epoch-199.model",
+        model_path="/usr/bin/MACE/models/2023-12-03-mace-128-L1_epoch-199.model",
         device=device,
         default_dtype="float32",
     )
