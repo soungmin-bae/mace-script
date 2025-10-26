@@ -12,9 +12,11 @@ Features:
   - Logs total energy, max force, and stress per step
   - Generates fully phonopy-compatible vasprun.xml
 """
-
 from __future__ import annotations
-import argparse, sys, os, glob, numpy as np, matplotlib.pyplot as plt
+import argparse, sys, os, glob, numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from ase.io import read, write
 from ase.optimize import FIRE
 from ase.io.trajectory import Trajectory
@@ -29,25 +31,39 @@ import xml.etree.ElementTree as ET
 def get_mace_calculator(device="cpu"):
     from mace.calculators import MACECalculator
     return MACECalculator(
-        model_path="/usr/bin/MACE/models/2023-12-03-mace-128-L1_epoch-199.model",
+        model_path="/Users/bama/package/MACE/models/mace-omat-0-small-fp32.model",
         device=device,
         default_dtype="float32",
     )
 
 
 # ============================================================
-# 2) Logger
+# 2) Logger (with context manager)
 # ============================================================
 class Logger:
     def __init__(self, logfile="relax_log.txt"):
         self.terminal = sys.stdout
         self.log = open(logfile, "w", buffering=1)
+
     def write(self, msg):
         self.terminal.write(msg)
         self.log.write(msg)
+
     def flush(self):
         self.terminal.flush()
         self.log.flush()
+
+    def close(self):
+        try:
+            self.log.flush()
+        finally:
+            self.log.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
 
 
 # ============================================================
@@ -122,7 +138,6 @@ def write_outcar(atoms, energy, outcar_name="OUTCAR"):
 def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
     """Write vasprun.xml in phonopy-compatible minimal format."""
     forces = atoms.get_forces()
-
     root = ET.Element("modeling")
 
     gen = ET.SubElement(root, "generator")
@@ -131,8 +146,6 @@ def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
 
     atominfo = ET.SubElement(root, "atominfo")
     ET.SubElement(atominfo, "atoms").text = str(len(atoms))
-
-    ET.SubElement(root, "structure")
 
     calc = ET.SubElement(root, "calculation")
     varr = ET.SubElement(calc, "varray", name="forces")
@@ -152,12 +165,13 @@ def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
 
 
 # ============================================================
-# 5) Relaxation routine (with per-file PDF)
+# 5) Relaxation routine
 # ============================================================
 def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
                     device="cpu", isif=2, fix_axis=None,
                     quiet=False, contcar_name="CONTCAR",
-                    outcar_name="OUTCAR", xml_name="vasprun-mace.xml"):
+                    outcar_name="OUTCAR", xml_name="vasprun-mace.xml",
+                    make_pdf=True):
     atoms = read(input_file)
     prefix = os.path.basename(input_file)
     if not quiet:
@@ -177,30 +191,30 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
         if not quiet:
             print(f"⚙️  Starting FIRE relaxation (fmax={fmax:.4f} eV/Å, smax={smax:.4f} eV/Å³, ISIF={isif})")
 
-        traj = Trajectory(f"relax-{prefix}.traj", "w", target)
-        opt = FIRE(target, maxstep=0.1, dt=0.1, trajectory=traj)
+        with Trajectory(f"relax-{prefix}.traj", "w", target) as traj:
+            opt = FIRE(target, maxstep=0.1, dt=0.1, trajectory=traj)
 
-        def log_callback():
-            e = atoms.get_potential_energy()
-            fmax_cur = np.abs(atoms.get_forces()).max()
-            stress_cur = np.abs(atoms.get_stress()).max() if isif >= 3 else 0.0
-            steps.append(len(steps))
-            energies.append(e)
-            forces_hist.append(fmax_cur)
-            stress_hist.append(stress_cur)
-            print(f" Step {len(steps):4d} | E = {e:.6f} eV | Fmax={fmax_cur:.5f} | σmax={stress_cur:.5f}")
-            if fmax_cur < fmax and (isif < 3 or stress_cur < smax):
-                print("✅ Converged: force & stress thresholds satisfied.")
-                if hasattr(opt, "stop"):
-                    opt.stop()
-                else:
-                    raise SystemExit
+            def log_callback():
+                e = atoms.get_potential_energy()
+                fmax_cur = np.abs(atoms.get_forces()).max()
+                stress_cur = np.abs(atoms.get_stress()).max() if isif >= 3 else 0.0
+                steps.append(len(steps))
+                energies.append(e)
+                forces_hist.append(fmax_cur)
+                stress_hist.append(stress_cur)
+                print(f" Step {len(steps):4d} | E = {e:.6f} eV | Fmax={fmax_cur:.5f} | σmax={stress_cur:.5f}")
+                if fmax_cur < fmax and (isif < 3 or stress_cur < smax):
+                    print("✅ Converged: force & stress thresholds satisfied.")
+                    if hasattr(opt, "stop"):
+                        opt.stop()
+                    else:
+                        raise SystemExit
 
-        opt.attach(log_callback, interval=1)
-        try:
-            opt.run(fmax=fmax)
-        except SystemExit:
-            pass
+            opt.attach(log_callback, interval=1)
+            try:
+                opt.run(fmax=fmax)
+            except SystemExit:
+                pass
 
         e = atoms.get_potential_energy()
         write(contcar_name, atoms, format="vasp")
@@ -208,39 +222,39 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
         write_vasprun_xml(atoms, e, xml_name)
 
     # ============================================================
-    # 6) Always save log PDF (single-point or relaxed)
+    # 6) Optional Log plot
     # ============================================================
-    fig, ax1 = plt.subplots(figsize=(6, 4))
-    if energies:
-        ax1.plot(steps, energies, color="tab:blue", marker="o", lw=1.0, label="Total Energy (eV)")
-    else:
-        e_final = atoms.get_potential_energy()
-        ax1.scatter([0], [e_final], color="tab:blue", label="Single-point Energy (eV)")
-    ax1.set_xlabel("Optimization step" if energies else "Single point")
-    ax1.set_ylabel("Energy (eV)", color="tab:blue")
-    ax1.tick_params(axis="y", labelcolor="tab:blue")
-    ax1.grid(alpha=0.3)
+    if make_pdf:
+        fig, ax1 = plt.subplots(figsize=(6, 4))
+        if energies:
+            ax1.plot(steps, energies, color="tab:blue", marker="o", lw=1.0, label="Total Energy (eV)")
+        else:
+            e_final = atoms.get_potential_energy()
+            ax1.scatter([0], [e_final], color="tab:blue", label="Single-point Energy (eV)")
+        ax1.set_xlabel("Optimization step" if energies else "Single point")
+        ax1.set_ylabel("Energy (eV)", color="tab:blue")
+        ax1.tick_params(axis="y", labelcolor="tab:blue")
+        ax1.grid(alpha=0.3)
 
-    if energies and forces_hist:
-        ax2 = ax1.twinx()
-        ax2.plot(steps, forces_hist, color="tab:red", marker="s", lw=1.0, label="Fmax (eV/Å)")
-        if isif >= 3:
-            ax2.plot(steps, stress_hist, color="tab:green", marker="^", lw=1.0, label="σmax (eV/Å³)")
-        ax2.set_ylabel("Force / Stress", color="tab:red")
-        ax2.tick_params(axis="y", labelcolor="tab:red")
+        if energies and forces_hist:
+            ax2 = ax1.twinx()
+            ax2.plot(steps, forces_hist, color="tab:red", marker="s", lw=1.0, label="Fmax (eV/Å)")
+            if isif >= 3:
+                ax2.plot(steps, stress_hist, color="tab:green", marker="^", lw=1.0, label="σmax (eV/Å³)")
+            ax2.set_ylabel("Force / Stress", color="tab:red")
+            ax2.tick_params(axis="y", labelcolor="tab:red")
+            lines, labels = ax1.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax2.legend(lines + lines2, labels + labels2, loc="best")
+        else:
+            ax1.legend(loc="best")
 
-        lines, labels = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax2.legend(lines + lines2, labels + labels2, loc="best")
-    else:
-        ax1.legend(loc="best")
-
-    plt.title(f"Relaxation progress ({prefix})")
-    plt.tight_layout()
-    pdf_name = f"relax-{prefix}_log.pdf"
-    plt.savefig(pdf_name)
-    plt.close(fig)
-    print(f"📈 Saved detailed log plot → {pdf_name}")
+        plt.title(f"Relaxation progress ({prefix})")
+        plt.tight_layout()
+        pdf_name = f"relax-{prefix}_log.pdf"
+        plt.savefig(pdf_name)
+        plt.close(fig)
+        print(f"📈 Saved detailed log plot → {pdf_name}")
 
 
 # ============================================================
@@ -256,15 +270,15 @@ if __name__ == "__main__":
                         help="Input file(s) or pattern(s) (e.g. POSCAR-*).")
     parser.add_argument("--fmax", type=float, default=0.01)
     parser.add_argument("--smax", type=float, default=0.001)
-    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
+    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "mps"])
     parser.add_argument("--isif", type=int, default=2, choices=list(range(8)))
     parser.add_argument("--fix-axis", type=str, default="")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")  # <-- added
 
     args = parser.parse_args()
     fix_axis = [ax.strip().lower() for ax in args.fix_axis.split(",") if ax.strip()]
 
-    # ✅ glob & multiple pattern support
     input_patterns = args.input
     input_files = []
     for pat in input_patterns:
@@ -275,24 +289,35 @@ if __name__ == "__main__":
         print(f"❌ No files match pattern(s): {input_patterns}")
         sys.exit(1)
 
+    orig_stdout = sys.stdout
+
     for infile in input_files:
         prefix = os.path.basename(infile)
         log_name = f"relax-{prefix}_log.txt"
-        sys.stdout = Logger(log_name)
-        print(f"▶ Using MACE on '{infile}' | ISIF={args.isif} | fmax={args.fmax} | smax={args.smax} | device={args.device}")
-
-        relax_structure(
-            input_file=infile,
-            fmax=args.fmax,
-            smax=args.smax,
-            device=args.device,
-            isif=args.isif,
-            fix_axis=fix_axis,
-            quiet=args.quiet,
-            contcar_name=f"CONTCAR-{prefix}",
-            outcar_name=f"OUTCAR-{prefix}",
-            xml_name=f"vasprun-{prefix}.xml",
-        )
-
-        print(f"✅ Finished {infile} → Results saved as CONTCAR-{prefix}, OUTCAR-{prefix}, vasprun-{prefix}.xml, relax-{prefix}_log.txt, relax-{prefix}_log.pdf")
-        print("-" * 80)
+        try:
+            with Logger(log_name) as lg:
+                sys.stdout = lg
+                print(f"▶ Using MACE on '{infile}' | ISIF={args.isif} | fmax={args.fmax} | smax={args.smax} | device={args.device}")
+                relax_structure(
+                    input_file=infile,
+                    fmax=args.fmax,
+                    smax=args.smax,
+                    device=args.device,
+                    isif=args.isif,
+                    fix_axis=fix_axis,
+                    quiet=args.quiet,
+                    contcar_name=f"CONTCAR-{prefix}",
+                    outcar_name=f"OUTCAR-{prefix}",
+                    xml_name=f"vasprun-{prefix}.xml",
+                    make_pdf=not args.no_pdf,  # <-- added
+                )
+                print(f"✅ Finished {infile} → Results saved as CONTCAR-{prefix}, OUTCAR-{prefix}, vasprun-{prefix}.xml, relax-{prefix}_log.txt")
+                if not args.no_pdf:
+                    print(f"and relax-{prefix}_log.pdf")
+                print("-" * 80)
+        except Exception as e:
+            sys.stdout = orig_stdout
+            print(f"[SKIP] {infile}: {e}")
+            continue
+        finally:
+            sys.stdout = orig_stdout
