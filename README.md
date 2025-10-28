@@ -37,8 +37,6 @@ docker pull soungminbae/mace-relax-cpu:r2scan
 # Pull the image with the pbe-u model (default small fp32 model)
 docker pull soungminbae/mace-relax-cpu:pbe-u
 
-# You can also pull the 'latest' tag, which currently points to the pbe-u model
-docker pull soungminbae/mace-relax-cpu:latest
 ```
 > **Note:** If you wish to build an image with a different MACE model, you can use the `--build-arg BUILD_MODEL_NAME=<your_model_file.model>` option during `docker build`.
 
