@@ -136,7 +136,6 @@ def write_outcar(atoms, energy, outcar_name="OUTCAR"):
 
 
 def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
-    """Write vasprun.xml in phonopy-compatible minimal format."""
     forces = atoms.get_forces()
     root = ET.Element("modeling")
 
@@ -167,6 +166,23 @@ def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
 # ============================================================
 # 5) Relaxation routine
 # ============================================================
+def masked_sigma_max(atoms, fix_axis):
+    """Return σmax ignoring stress components associated with fixed axes."""
+    s = atoms.get_stress(voigt=False)  # 3x3 stress tensor
+    fix_idx = {'a': 0, 'b': 1, 'c': 2}
+    fixed = set(fix_idx[ax] for ax in (fix_axis or []))
+    mask = np.ones((3, 3), dtype=bool)
+    for i in range(3):
+        if i in fixed:
+            mask[i, i] = False
+        for j in range(3):
+            if i != j and (i in fixed or j in fixed):
+                mask[i, j] = False
+    if not mask.any():
+        return 0.0
+    return float(np.max(np.abs(s[mask])))
+
+
 def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
                     device="cpu", isif=2, fix_axis=None,
                     quiet=False, contcar_name="CONTCAR",
@@ -197,7 +213,7 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
             def log_callback():
                 e = atoms.get_potential_energy()
                 fmax_cur = np.abs(atoms.get_forces()).max()
-                stress_cur = np.abs(atoms.get_stress()).max() if isif >= 3 else 0.0
+                stress_cur = masked_sigma_max(atoms, fix_axis) if isif >= 3 else 0.0
                 steps.append(len(steps))
                 energies.append(e)
                 forces_hist.append(fmax_cur)
@@ -274,7 +290,7 @@ if __name__ == "__main__":
     parser.add_argument("--isif", type=int, default=2, choices=list(range(8)))
     parser.add_argument("--fix-axis", type=str, default="")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")  # <-- added
+    parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")
 
     args = parser.parse_args()
     fix_axis = [ax.strip().lower() for ax in args.fix_axis.split(",") if ax.strip()]
@@ -309,7 +325,7 @@ if __name__ == "__main__":
                     contcar_name=f"CONTCAR-{prefix}",
                     outcar_name=f"OUTCAR-{prefix}",
                     xml_name=f"vasprun-{prefix}.xml",
-                    make_pdf=not args.no_pdf,  # <-- added
+                    make_pdf=not args.no_pdf,
                 )
                 print(f"✅ Finished {infile} → Results saved as CONTCAR-{prefix}, OUTCAR-{prefix}, vasprun-{prefix}.xml, relax-{prefix}_log.txt")
                 if not args.no_pdf:
