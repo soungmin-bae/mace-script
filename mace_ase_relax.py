@@ -116,14 +116,40 @@ def get_relax_target(atoms, isif: int, fix_axis: list[str]):
 # ============================================================
 def write_outcar(atoms, energy, outcar_name="OUTCAR"):
     forces = atoms.get_forces()
-    positions = atoms.get_positions()
+    cart_positions = atoms.get_positions()
     drift = np.mean(forces, axis=0)
     n_atoms = len(atoms)
+    volume = atoms.get_volume()
+
+    direct_cell = atoms.get_cell()
+    reciprocal_cell = np.linalg.inv(direct_cell).T
+    direct_lengths = np.linalg.norm(direct_cell, axis=1)
+    reciprocal_lengths = np.linalg.norm(reciprocal_cell, axis=1)
+    scaled_positions = atoms.get_scaled_positions()
+
     with open(outcar_name, "w") as f:
+        f.write(f" volume of cell : {volume:12.4f}\n\n")
+
+        f.write("  direct lattice vectors                    reciprocal lattice vectors\n")
+        for i in range(3):
+            d = direct_cell[i]
+            r = reciprocal_cell[i]
+            f.write(f"    {d[0]:12.9f} {d[1]:12.9f} {d[2]:12.9f}    {r[0]:12.9f} {r[1]:12.9f} {r[2]:12.9f}\n")
+        f.write("\n")
+
+        f.write("  length of vectors\n")
+        f.write(f"    {direct_lengths[0]:12.9f} {direct_lengths[1]:12.9f} {direct_lengths[2]:12.9f}    {reciprocal_lengths[0]:12.9f} {reciprocal_lengths[1]:12.9f} {reciprocal_lengths[2]:12.9f}\n")
+        f.write("\n")
+
+        f.write("  position of ions in fractional coordinates (direct lattice)\n")
+        for pos in scaled_positions:
+            f.write(f"     {pos[0]:11.9f} {pos[1]:11.9f} {pos[2]:11.9f}\n")
+        f.write("\n")
+
         f.write(" POSITION                                       TOTAL-FORCE (eV/Angst)\n")
         f.write(" -----------------------------------------------------------------------------------\n")
         for i in range(n_atoms):
-            x, y, z = positions[i]
+            x, y, z = cart_positions[i]
             fx, fy, fz = forces[i]
             f.write(f" {x:12.5f} {y:12.5f} {z:12.5f}   {fx:12.6f} {fy:12.6f} {fz:12.6f}\n")
         f.write(" -----------------------------------------------------------------------------------\n")
@@ -136,6 +162,7 @@ def write_outcar(atoms, energy, outcar_name="OUTCAR"):
 
 
 def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
+    """Write vasprun.xml in phonopy-compatible minimal format."""
     forces = atoms.get_forces()
     root = ET.Element("modeling")
 
@@ -145,6 +172,16 @@ def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
 
     atominfo = ET.SubElement(root, "atominfo")
     ET.SubElement(atominfo, "atoms").text = str(len(atoms))
+
+    struct = ET.SubElement(root, "structure", name="finalpos")
+    crystal = ET.SubElement(struct, "crystal")
+    basis = ET.SubElement(crystal, "varray", name="basis")
+    for vec in atoms.get_cell():
+        ET.SubElement(basis, "v").text = f" {vec[0]:16.8f} {vec[1]:16.8f} {vec[2]:16.8f} "
+    ET.SubElement(crystal, "i", name="volume").text = f" {atoms.get_volume():.8f} "
+    positions = ET.SubElement(struct, "varray", name="positions")
+    for pos in atoms.get_scaled_positions():
+        ET.SubElement(positions, "v").text = f" {pos[0]:16.8f} {pos[1]:16.8f} {pos[2]:16.8f} "
 
     calc = ET.SubElement(root, "calculation")
     varr = ET.SubElement(calc, "varray", name="forces")
@@ -166,23 +203,6 @@ def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
 # ============================================================
 # 5) Relaxation routine
 # ============================================================
-def masked_sigma_max(atoms, fix_axis):
-    """Return σmax ignoring stress components associated with fixed axes."""
-    s = atoms.get_stress(voigt=False)  # 3x3 stress tensor
-    fix_idx = {'a': 0, 'b': 1, 'c': 2}
-    fixed = set(fix_idx[ax] for ax in (fix_axis or []))
-    mask = np.ones((3, 3), dtype=bool)
-    for i in range(3):
-        if i in fixed:
-            mask[i, i] = False
-        for j in range(3):
-            if i != j and (i in fixed or j in fixed):
-                mask[i, j] = False
-    if not mask.any():
-        return 0.0
-    return float(np.max(np.abs(s[mask])))
-
-
 def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
                     device="cpu", isif=2, fix_axis=None,
                     quiet=False, contcar_name="CONTCAR",
@@ -213,7 +233,7 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
             def log_callback():
                 e = atoms.get_potential_energy()
                 fmax_cur = np.abs(atoms.get_forces()).max()
-                stress_cur = masked_sigma_max(atoms, fix_axis) if isif >= 3 else 0.0
+                stress_cur = np.abs(atoms.get_stress()).max() if isif >= 3 else 0.0
                 steps.append(len(steps))
                 energies.append(e)
                 forces_hist.append(fmax_cur)
@@ -290,7 +310,7 @@ if __name__ == "__main__":
     parser.add_argument("--isif", type=int, default=2, choices=list(range(8)))
     parser.add_argument("--fix-axis", type=str, default="")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")
+    parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")  # <-- added
 
     args = parser.parse_args()
     fix_axis = [ax.strip().lower() for ax in args.fix_axis.split(",") if ax.strip()]
@@ -325,7 +345,7 @@ if __name__ == "__main__":
                     contcar_name=f"CONTCAR-{prefix}",
                     outcar_name=f"OUTCAR-{prefix}",
                     xml_name=f"vasprun-{prefix}.xml",
-                    make_pdf=not args.no_pdf,
+                    make_pdf=not args.no_pdf,  # <-- added
                 )
                 print(f"✅ Finished {infile} → Results saved as CONTCAR-{prefix}, OUTCAR-{prefix}, vasprun-{prefix}.xml, relax-{prefix}_log.txt")
                 if not args.no_pdf:
