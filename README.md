@@ -20,6 +20,47 @@ It supports VASP-like `ISIF` modes (0–7), Phonopy-compatible `vasprun.xml` out
 
 ---
 
+## Docker Usage
+
+The way to run this script is via the pre-built Docker image. (built with mace-omat-0-small-fp32.model model)
+
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) must be installed and running.
+
+### 1. Pull the Image
+Download the official image from Docker Hub:
+```bash
+docker pull soungminbae/mace-relax-cpu:latest
+```
+
+### 2. Run Calculations
+Use the `docker run` command to perform calculations. The key is to mount your current working directory (containing your structure files) into the container's `/app/data` directory using the `-v $(pwd):/app/data` flag.
+
+**Command Template:**
+```bash
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/<your_file> [options]
+```
+
+**Examples:**
+
+```bash
+# Standard atomic relaxation (ISIF=2) on a POSCAR file
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/POSCAR --isif 2
+
+# Full cell relaxation (ISIF=3)
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/POSCAR --isif 3
+
+# Batch relaxation for multiple structures (note the quotes around the pattern)
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input "data/POSCAR-*" --isif 2
+
+# Single-point calculation (ISIF=0)
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/POSCAR --isif 0
+```
+> **Note:** All output files (`CONTCAR-*`, `OUTCAR-*`, etc.) will be created in your current directory on your host machine.
+
+---
+
+
 ## 📂 Output Files
 
 For each input file (`POSCAR-001`, `POSCAR-002`, ...), the following files are produced:
