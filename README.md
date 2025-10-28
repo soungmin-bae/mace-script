@@ -20,46 +20,48 @@ It supports VASP-like `ISIF` modes (0–7), Phonopy-compatible `vasprun.xml` out
 
 ---
 
-## Docker Usage
+## Docker Usage (Recommended)
 
-The way to run this script is via the pre-built Docker image. (built with mace-omat-0-small-fp32.model model)
+The way to run this script is via the pre-built Docker image.
 
 ### Prerequisites
 - [Docker](https://docs.docker.com/get-docker/) must be installed and running.
 
 ### 1. Pull the Image
-Download the official image from Docker Hub:
+Download the official images from Docker Hub. We provide images pre-configured with specific MACE models:
+
 ```bash
+# Pull the image with the r2scan model
+docker pull soungminbae/mace-relax-cpu:r2scan
+
+# Pull the image with the pbe-u model (default small fp32 model)
+docker pull soungminbae/mace-relax-cpu:pbe-u
+
+# You can also pull the 'latest' tag, which currently points to the pbe-u model
 docker pull soungminbae/mace-relax-cpu:latest
 ```
+> **Note:** If you wish to build an image with a different MACE model, you can use the `--build-arg BUILD_MODEL_NAME=<your_model_file.model>` option during `docker build`.
 
 ### 2. Run Calculations
 Use the `docker run` command to perform calculations. The key is to mount your current working directory (containing your structure files) into the container's `/app/data` directory using the `-v $(pwd):/app/data` flag.
 
 **Command Template:**
 ```bash
-docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/<your_file> [options]
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:<image_tag> --input data/<your_file> [options]
 ```
 
 **Examples:**
 
 ```bash
-# Standard atomic relaxation (ISIF=2) on a POSCAR file
-docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/POSCAR --isif 2
+# Run relaxation using the r2scan model (ISIF=3)
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:r2scan --input data/POSCAR 
 
-# Full cell relaxation (ISIF=3)
-docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/POSCAR --isif 3
+# Run relaxation using the pbe-u model (ISIF=2)
+docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:pbe-u --input data/POSCAR 
 
-# Batch relaxation for multiple structures (note the quotes around the pattern)
-docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input "data/POSCAR-*" --isif 2
-
-# Single-point calculation (ISIF=0)
-docker run --rm -v $(pwd):/app/data soungminbae/mace-relax-cpu:latest --input data/POSCAR --isif 0
 ```
 > **Note:** All output files (`CONTCAR-*`, `OUTCAR-*`, etc.) will be created in your current directory on your host machine.
-
 ---
-
 
 ## 📂 Output Files
 
