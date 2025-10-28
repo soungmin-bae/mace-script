@@ -20,7 +20,7 @@ It supports VASP-like `ISIF` modes (0–7), Phonopy-compatible `vasprun.xml` out
 
 ---
 
-## Docker Usage (Recommended)
+## Docker Usage
 
 The way to run this script is via the pre-built Docker image.
 
