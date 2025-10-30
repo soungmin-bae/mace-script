@@ -143,29 +143,54 @@ def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
     forces = atoms.get_forces()
     root = ET.Element("modeling")
 
+    # --- generator ---
     gen = ET.SubElement(root, "generator")
     ET.SubElement(gen, "i", name="program", type="string").text = "vasp"
-    ET.SubElement(gen, "i", name="version", type="string").text = "6.5.0  "
+    ET.SubElement(gen, "i", name="version", type="string").text = "6.5.0"
 
+    # --- atominfo ---
     atominfo = ET.SubElement(root, "atominfo")
-    ET.SubElement(atominfo, "atoms").text = str(len(atoms))
+    array = ET.SubElement(atominfo, "array", name="atoms")
+    set_node = ET.SubElement(array, "set")
+    for i, s in enumerate(atoms.get_chemical_symbols()):
+        rc = ET.SubElement(set_node, "rc")
+        ET.SubElement(rc, "c").text = str(i + 1)
+        ET.SubElement(rc, "c").text = s
 
+    # --- calculation ---
     calc = ET.SubElement(root, "calculation")
-    varr = ET.SubElement(calc, "varray", name="forces")
-    for f in forces:
-        ET.SubElement(varr, "v").text = f"{f[0]: .10f}  {f[1]: .10f}  {f[2]: .10f}"
 
-    energy_tag = ET.SubElement(calc, "energy")
-    ET.SubElement(energy_tag, "i", name="e_fr_energy").text = f"{energy:.10f}"
+    struct = ET.SubElement(calc, "structure", name="finalpos")
+    crystal = ET.SubElement(struct, "crystal")
+    basis_in_struct = ET.SubElement(crystal, "varray", name="basis")
+    for vec in atoms.get_cell():
+        ET.SubElement(basis_in_struct, "v").text = f" {vec[0]:18.10f} {vec[1]:18.10f} {vec[2]:18.10f} "
+    ET.SubElement(crystal, "i", name="volume").text = f"{atoms.get_volume():.10f}"
+    pos_in_struct = ET.SubElement(struct, "varray", name="positions")
+    for p in atoms.get_scaled_positions():
+        ET.SubElement(pos_in_struct, "v").text = f" {p[0]:18.10f} {p[1]:18.10f} {p[2]:18.10f} "
+
+    basis = ET.SubElement(calc, "varray", name="basis")      # not in <structure>
+    for vec in atoms.get_cell():
+        ET.SubElement(basis, "v").text = f" {vec[0]:18.10f} {vec[1]:18.10f} {vec[2]:18.10f} "
+    positions = ET.SubElement(calc, "varray", name="positions")  # not in <structure>
+    for p in atoms.get_scaled_positions():
+        ET.SubElement(positions, "v").text = f" {p[0]:18.10f} {p[1]:18.10f} {p[2]:18.10f} "
+
+    energy_node = ET.SubElement(calc, "energy")
+    ET.SubElement(energy_node, "i", name="e_fr_energy").text = f"{energy:.10f}"
+    ET.SubElement(energy_node, "i", name="e_wo_entrp").text = f"{energy:.10f}"
+    ET.SubElement(energy_node, "i", name="e_entropy").text = "0.00000000"
+
+    forces_node = ET.SubElement(calc, "varray", name="forces")
+    for f in forces:
+        ET.SubElement(forces_node, "v").text = f" {f[0]:18.10f} {f[1]:18.10f} {f[2]:18.10f} "
 
     ET.indent(root, space="  ", level=0)
     tree = ET.ElementTree(root)
-    with open(xml_name, "wb") as f:
-        f.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
-        tree.write(f, encoding="utf-8")
+    tree.write(xml_name, encoding="utf-8", xml_declaration=True)
 
     print(f"📝 Wrote {xml_name} (phonopy-compatible XML)")
-
 
 # ============================================================
 # 5) Relaxation routine
