@@ -28,7 +28,6 @@ import xml.etree.ElementTree as ET
 # ============================================================
 def get_mace_calculator(device="cpu"):
     from mace.calculators import MACECalculator
-    # Dockerfile에 설정된 환경 변수에서 모델 경로를 가져옵니다.
     model_path = os.getenv("MACE_MODEL_PATH", "/Users/bama/package/MACE/models/mace-omat-0-small-fp32.model")
     if not model_path or not os.path.exists(model_path):
         raise FileNotFoundError("MACE model not found at path specified by MACE_MODEL_PATH env var.")
