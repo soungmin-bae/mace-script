@@ -1,4 +1,4 @@
-# mace_ase_relax.py
+# mace_ase_relax
 
 **Automated structure relaxation and single-point calculations using MACE + ASE**
 
