@@ -20,10 +20,10 @@ from ase.geometry import cellpar_to_cell
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary, ZeroRotation
 import ase.units as u
 import numpy as np
-import argparse, csv
+import argparse, csv, os
 
 # --- Defaults -----------------------------------------------------------------
-MODEL_PATH_DEF     = "/Users/bama/package/MACE/models/mace-omat-0-small.model"
+MODEL_PATH_DEF     = "/Users/bama/package/MACE/models/mace-omat-0-small-fp32.model"
 DEVICE_DEF         = "cpu"         # use "cuda" to enable GPU
 TEMP_K_DEF         = 300.0         # target temperature [K]
 PRESS_GPa_DEF      = 0.0           # target pressure [GPa] (NPT only)
@@ -69,18 +69,24 @@ def build_argparser():
         formatter_class=_Fmt,
         epilog=(
             "Examples:\n"
-            "  # NPT (Nose–Hoover barostat) — 600 K, 1 GPa, GPU, save every 100 steps\n"
-            "  python md.py --ensemble npt --temp 600 --press 1.0 --ttau 100 --ptau 1000 \\\n"
+            "  python mace_ase_md.py --ensemble npt --temp 600 --press 1.0 --ttau 100 --ptau 1000 \\\n"
             "               --device cuda --nsteps 20000 --save-every 100\n"
-            "\n"
-            "  # NVT (NTE; prefers Nose–Hoover chain, falls back to Berendsen) — 600 K, 5,000 steps\n"
-            "  python md.py --ensemble nte --temp 600 --ttau 100 --nsteps 5000\n"
-            "\n"
-            "  # Reproducible run (fixed seed) + adjusted print/save intervals\n"
-            "  python md.py --ensemble npt --temp 300 --press 0.0 --ttau 100 --ptau 1000 \\\n"
-            "               --seed 42 --print-every 10 --save-every 100\n"
+            "  python mace_ase_md.py --ensemble nte --temp 600 --ttau 100 --nsteps 5000\n"
+            "  python mace_ase_md.py --input Si_POSCAR --output-dir results --job-name Si_MD\n"
         )
     )
+
+    # === Flexible I/O options ===
+    p.add_argument("--input", default="POSCAR", help="input POSCAR file name")
+    p.add_argument("--output-dir", default=".", help="directory to store output files")
+    p.add_argument("--job-name", default=None,
+                   help="custom base name for output files (overrides input filename)")
+
+    # === New prefix options ===
+    p.add_argument("--prefix-md", default="md-", help="prefix for MD-related output files (csv/log/traj)")
+    p.add_argument("--prefix-xdatcar", default="XDATCAR-", help="prefix for XDATCAR output file")
+
+    # === MD parameters ===
     p.add_argument("--model", default=MODEL_PATH_DEF, help="MACE model path")
     p.add_argument("--device", choices=["cpu","cuda"], default=DEVICE_DEF, help="compute device")
     p.add_argument("--ensemble", choices=["npt","nte"], default=ENSEMBLE_DEF,
@@ -95,19 +101,40 @@ def build_argparser():
     p.add_argument("--xdat-every", type=int, default=XDAT_EVERY_DEF, help="XDATCAR write interval")
     p.add_argument("--print-every", type=int, default=PRINT_EVERY_DEF, help="stdout print interval")
     p.add_argument("--seed", type=int, default=RNG_SEED_DEF, help="random seed (None for random)")
+
+    # === Output file paths (can be overridden) ===
     p.add_argument("--csv", default=CSV_PATH_DEF, help="CSV log path for MD outputs")
     p.add_argument("--xdatcar", default=XDATCAR_DEF, help="XDATCAR path")
     p.add_argument("--traj", default=TRAJ_PATH_DEF, help="ASE trajectory path")
     p.add_argument("--log", default=LOG_PATH_DEF, help="MD text log path")
+
     return p
 
 def main():
     args = build_argparser().parse_args()
 
-    # 0) Read input structure.
-    atoms = read("POSCAR")
+    # Determine base name (priority: job-name > input file base)
+    if args.job_name is not None:
+        base_noext = args.job_name
+    else:
+        base = os.path.basename(args.input)
+        base_noext = os.path.splitext(base)[0]
 
-    # Upper-triangular cell is recommended for NPT (harmless for NVT; keeps cell normalized).
+    # Ensure output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # === Prefix-based naming scheme with user-configurable prefixes ===
+    if args.csv == CSV_PATH_DEF:
+        args.csv = os.path.join(args.output_dir, f"{args.prefix_md}{base_noext}.csv")
+    if args.log == LOG_PATH_DEF:
+        args.log = os.path.join(args.output_dir, f"{args.prefix_md}{base_noext}.log")
+    if args.traj == TRAJ_PATH_DEF:
+        args.traj = os.path.join(args.output_dir, f"{args.prefix_md}{base_noext}.traj")
+    if args.xdatcar == XDATCAR_DEF:
+        args.xdatcar = os.path.join(args.output_dir, f"{args.prefix_xdatcar}{base_noext}")
+
+    # 0) Read input structure.
+    atoms = read(args.input)
     tri_cell = cellpar_to_cell(atoms.cell.cellpar())
     atoms.set_cell(tri_cell, scale_atoms=True)
     atoms.pbc = True
@@ -126,40 +153,21 @@ def main():
     ttime     = args.ttau  * u.fs
 
     if args.ensemble == "npt":
-        # NPT with Nose–Hoover barostat (ASE NPT).
         extstress = args.press * u.GPa
         pfact     = (args.ptau * u.fs) ** 2 * u.GPa
-        dyn = NPT(
-            atoms,
-            timestep=timestep,
-            temperature_K=args.temp,
-            externalstress=extstress,
-            ttime=ttime,
-            pfactor=pfact,
-        )
+        dyn = NPT(atoms, timestep=timestep, temperature_K=args.temp,
+                  externalstress=extstress, ttime=ttime, pfactor=pfact)
     else:
-        # NVT (NTE): prefer Nose–Hoover chain; fallback to Berendsen.
         if NVT_NHC is not None:
-            dyn = NVT_NHC(
-                atoms,
-                timestep=timestep,
-                temperature_K=args.temp,
-                tdamp=ttime,   # thermostat damping time constant
-            )
+            dyn = NVT_NHC(atoms, timestep=timestep,
+                          temperature_K=args.temp, tdamp=ttime)
         elif NVT_Ber is not None:
-            dyn = NVT_Ber(
-                atoms,
-                timestep=timestep,
-                temperature_K=args.temp,
-                taut=ttime,    # Berendsen thermostat time constant
-            )
+            dyn = NVT_Ber(atoms, timestep=timestep,
+                          temperature_K=args.temp, taut=ttime)
         else:
-            raise ImportError(
-                "NVT integrator not found in this ASE installation. "
-                "Please install/update ASE with NoseHooverChainNVT or NVTBerendsen."
-            )
+            raise ImportError("NVT integrator not found in this ASE installation.")
 
-    # 2) Logging: trajectory + text logger.
+    # 2) Logging setup.
     traj = Trajectory(args.traj, "w", atoms)
     dyn.attach(traj.write, interval=args.save_every)
     logfile = open(args.log, "w")
@@ -167,20 +175,18 @@ def main():
                interval=args.save_every)
 
     # 3) XDATCAR setup.
-    species, counts = parse_poscar_header_for_xdatcar("POSCAR")
+    species, counts = parse_poscar_header_for_xdatcar(args.input)
     xdat_handle = open(args.xdatcar, "w")
 
-    # 4) CSV (custom observables) setup.
+    # 4) CSV setup.
     csv_handle = open(args.csv, "w", newline="")
     csv_writer = csv.writer(csv_handle)
     csv_writer.writerow(["step","time_fs","Epot_eV","Ekin_eV","Etot_eV","T_K","Vol_A3","P_GPa","H_eV"])
 
-    # State & utilities.
     config_idx = 0
     step_counter = 0
 
     def write_xdatcar_block():
-        """Append one XDATCAR configuration block from current Atoms state."""
         nonlocal config_idx
         config_idx += 1
         xdat_handle.write(" ".join(species) + "\n")
@@ -195,39 +201,32 @@ def main():
             xdat_handle.write(f"   {s[0]:.8f}   {s[1]:.8f}   {s[2]:.8f}\n")
 
     def collect_observables():
-        """Compute a set of common MD observables from the current state."""
         epot = atoms.get_potential_energy()
         ekin = atoms.get_kinetic_energy()
         etot = epot + ekin
         temp = atoms.get_temperature()
         vol  = atoms.get_volume()
-        sigma = atoms.get_stress(voigt=False)  # stress tensor in eV/Å^3
+        sigma = atoms.get_stress(voigt=False)
         p_eVa3 = -np.trace(sigma) / 3.0
         p_GPa  = p_eVa3 * EV_A3_TO_GPa
-        H = etot + p_eVa3 * vol            # enthalpy-like quantity (E + pV) in eV
+        H = etot + p_eVa3 * vol
         t_fs = step_counter * args.tstep
         return epot, ekin, etot, temp, vol, p_GPa, H, t_fs
 
     def print_status_line(epot, ekin, etot, temp, vol, p_GPa, H, t_fs):
-        """Pretty single-line status for stdout."""
-        print(
-            f"Step{step_counter:7d} | t={t_fs:7.2f} fs | "
-            f"Epot={epot: .6f} eV | Ekin={ekin: .6f} eV | Etot={etot: .6f} eV | "
-            f"T={temp:7.2f} K | Vol={vol:8.3f} Å^3 | P={p_GPa: 7.4f} GPa | H={H: .6f} eV"
-        )
+        print(f"Step{step_counter:7d} | t={t_fs:7.2f} fs | "
+              f"Epot={epot: .6f} eV | Ekin={ekin: .6f} eV | Etot={etot: .6f} eV | "
+              f"T={temp:7.2f} K | Vol={vol:8.3f} Å^3 | P={p_GPa: 7.4f} GPa | H={H: .6f} eV")
 
     def write_csv_line(epot, ekin, etot, temp, vol, p_GPa, H, t_fs):
-        """Append one row of observables to the CSV log."""
         csv_writer.writerow([step_counter, t_fs, epot, ekin, etot, temp, vol, p_GPa, H])
 
-    # ▶ Initial (step 0) record: console + XDATCAR + CSV.
     epot, ekin, etot, temp, vol, p_GPa, H, t_fs = collect_observables()
     print_status_line(epot, ekin, etot, temp, vol, p_GPa, H, t_fs)
     write_xdatcar_block()
     write_csv_line(epot, ekin, etot, temp, vol, p_GPa, H, t_fs)
-    step_counter += 1  # subsequent integration starts at step 1
+    step_counter += 1
 
-    # Per-step callback.
     def on_step():
         nonlocal step_counter
         epot, ekin, etot, temp, vol, p_GPa, H, t_fs = collect_observables()
@@ -239,11 +238,8 @@ def main():
         step_counter += 1
 
     dyn.attach(on_step, interval=1)
-
-    # 5) Run MD.
     dyn.run(args.nsteps)
 
-    # 6) Finalize.
     xdat_handle.close()
     csv_handle.close()
     print(f"Done ({args.ensemble.upper()} MD): outputs → {args.traj} / {args.log} / {args.xdatcar} / {args.csv}")
