@@ -11,6 +11,7 @@ Features:
   - Outputs: CONTCAR-*, OUTCAR-*, vasprun-*.xml, relax-*_log.txt, relax-*_log.pdf
   - Logs total energy, max force, and stress per step
   - Generates fully phonopy-compatible vasprun.xml
+  - Generates PyDefect-compatible 'calc_results.json' via --pydefect
 """
 from __future__ import annotations
 import argparse, sys, os, glob, numpy as np
@@ -23,6 +24,11 @@ from ase.io.trajectory import Trajectory
 from ase.constraints import FixAtoms
 from ase.filters import UnitCellFilter, StrainFilter, ExpCellFilter
 import xml.etree.ElementTree as ET
+
+# === PyDefect Imports ===
+from pymatgen.io.ase import AseAtomsAdaptor
+from monty.json import MontyEncoder
+import json
 
 
 # ============================================================
@@ -80,32 +86,32 @@ def build_axis_mask(fix_axis: list[str]):
 
 def get_relax_target(atoms, isif: int, fix_axis: list[str]):
     if isif == 0:
-        print("🧊 ISIF=0 → Single-point calculation.")
+        print(" ISIF=0 → Single-point calculation.")
         return atoms
     elif isif == 1:
-        print("📊 ISIF=1 → Stress evaluation only.")
+        print(" ISIF=1 → Stress evaluation only.")
         atoms.set_constraint(FixAtoms(range(len(atoms))))
         return atoms
     elif isif == 2:
-        print("🔧 ISIF=2 → Relax atomic positions only.")
+        print(" ISIF=2 → Relax atomic positions only.")
         return atoms
     elif isif == 3:
-        print("🏗️ ISIF=3 → Relax atoms + full cell (volume & shape).")
+        print("️ ISIF=3 → Relax atoms + full cell (volume & shape).")
         mask = build_axis_mask(fix_axis)
-        print(f"📏 Fixed axes: {', '.join(fix_axis).upper() or '(none)'}")
+        print(f" Fixed axes: {', '.join(fix_axis).upper() or '(none)'}")
         return UnitCellFilter(atoms, mask=mask)
     elif isif == 4:
-        print("🏗️ ISIF=4 → Relax cell only.")
+        print("️ ISIF=4 → Relax cell only.")
         atoms.set_constraint(FixAtoms(range(len(atoms))))
         return UnitCellFilter(atoms, mask=build_axis_mask(fix_axis))
     elif isif == 5:
-        print("🏗️ ISIF=5 → Relax atoms + shape (volume fixed).")
+        print("️ ISIF=5 → Relax atoms + shape (volume fixed).")
         return ExpCellFilter(atoms, mask=build_axis_mask(fix_axis))
     elif isif == 6:
-        print("🏗️ ISIF=6 → Relax atoms + volume (shape fixed).")
+        print("️ ISIF=6 → Relax atoms + volume (shape fixed).")
         return StrainFilter(atoms, mask=build_axis_mask(fix_axis))
     elif isif == 7:
-        print("🏗️ ISIF=7 → Relax atoms + anisotropic shape.")
+        print("️ ISIF=7 → Relax atoms + anisotropic shape.")
         return ExpCellFilter(atoms, mask=build_axis_mask(fix_axis))
     else:
         raise ValueError("Unsupported ISIF. Choose 0–7.")
@@ -204,7 +210,7 @@ def write_outcar(atoms, energy, outcar_name="OUTCAR"):
         f.write(" ---------------------------------------------------\n")
         f.write(f"  free  energy   TOTEN  =  {energy:20.8f} eV\n")
         f.write(f"  energy  without entropy=  {energy:20.8f}  energy(sigma->0) =  {energy:20.8f}\n")
-    print(f"📝 Wrote {outcar_name} (with dummy data for pymatgen)")
+    print(f" Wrote {outcar_name} (with dummy data for pymatgen)")
 
 
 def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
@@ -243,7 +249,26 @@ def write_vasprun_xml(atoms, energy, xml_name="vasprun-mace.xml"):
         f.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
         tree.write(f, encoding="utf-8")
 
-    print(f"📝 Wrote {xml_name} (phonopy-compatible XML)")
+    print(f" Wrote {xml_name} (phonopy-compatible XML)")
+
+
+def write_calc_results_json(atoms, energy, filename="calc_results.json"):
+    """Write PyDefect-compatible calc_results.json file."""
+    pmg_struct = AseAtomsAdaptor.get_structure(atoms)
+    data = {
+        "@module": "pydefect.analyzer.calc_results",
+        "@class": "CalcResults",
+        "@version": "0.9.4",
+        "structure": pmg_struct.as_dict(),
+        "energy": float(energy),
+        "magnetization": 0.0,
+        "potentials": [0.0 for _ in range(len(atoms))],
+        "electronic_conv": True,
+        "ionic_conv": True,
+    }
+    with open(filename, "w") as f:
+        json.dump(data, f, cls=MontyEncoder, indent=2)
+    print(f"🧩 Wrote {filename} (PyDefect-compatible)")
 
 
 # ============================================================
@@ -253,11 +278,12 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
                     device="cpu", isif=2, fix_axis=None,
                     quiet=False, contcar_name="CONTCAR",
                     outcar_name="OUTCAR", xml_name="vasprun-mace.xml",
-                    make_pdf=True):
+                    make_pdf=True, write_json=False):
     atoms = read(input_file)
     prefix = os.path.basename(input_file)
+    output_dir = os.path.dirname(input_file)
     if not quiet:
-        print(f"📥 Loaded structure from {input_file} ({len(atoms)} atoms)")
+        print(f" Loaded structure from {input_file} ({len(atoms)} atoms)")
     calc = get_mace_calculator(device)
     atoms.calc = calc
     target = get_relax_target(atoms, isif, fix_axis or [])
@@ -268,12 +294,14 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
         e = atoms.get_potential_energy()
         write_outcar(atoms, e, outcar_name)
         write_vasprun_xml(atoms, e, xml_name)
+        if write_json:
+            write_calc_results_json(atoms, e, filename=os.path.join(output_dir, "calc_results.json"))
         write(contcar_name, atoms, format="vasp")
     else:
         if not quiet:
             print(f"⚙️  Starting FIRE relaxation (fmax={fmax:.4f} eV/Å, smax={smax:.4f} eV/Å³, ISIF={isif})")
 
-        with Trajectory(f"relax-{prefix}.traj", "w", target) as traj:
+        with Trajectory(os.path.join(output_dir, f"relax-{prefix}.traj"), "w", target) as traj:
             opt = FIRE(target, maxstep=0.1, dt=0.1, trajectory=traj)
 
             def log_callback():
@@ -302,6 +330,8 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
         write(contcar_name, atoms, format="vasp")
         write_outcar(atoms, e, outcar_name)
         write_vasprun_xml(atoms, e, xml_name)
+        if write_json:
+            write_calc_results_json(atoms, e, filename=os.path.join(output_dir, "calc_results.json"))
 
     # ============================================================
     # 6) Optional Log plot
@@ -333,10 +363,10 @@ def relax_structure(input_file="POSCAR", fmax=0.01, smax=0.001,
 
         plt.title(f"Relaxation progress ({prefix})")
         plt.tight_layout()
-        pdf_name = f"relax-{prefix}_log.pdf"
+        pdf_name = os.path.join(output_dir, f"relax-{prefix}_log.pdf")
         plt.savefig(pdf_name)
         plt.close(fig)
-        print(f"📈 Saved detailed log plot → {pdf_name}")
+        print(f" Saved detailed log plot → {pdf_name}")
 
 
 # ============================================================
@@ -356,7 +386,8 @@ if __name__ == "__main__":
     parser.add_argument("--isif", type=int, default=2, choices=list(range(8)))
     parser.add_argument("--fix-axis", type=str, default="")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")  # <-- added
+    parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")
+    parser.add_argument("--pydefect", action="store_true", help="Write PyDefect-compatible calc_results.json")
 
     args = parser.parse_args()
     fix_axis = [ax.strip().lower() for ax in args.fix_axis.split(",") if ax.strip()]
@@ -375,7 +406,8 @@ if __name__ == "__main__":
 
     for infile in input_files:
         prefix = os.path.basename(infile)
-        log_name = f"relax-{prefix}_log.txt"
+        output_dir = os.path.dirname(infile)
+        log_name = os.path.join(output_dir, f"relax-{prefix}_log.txt")
         try:
             with Logger(log_name) as lg:
                 sys.stdout = lg
@@ -388,14 +420,14 @@ if __name__ == "__main__":
                     isif=args.isif,
                     fix_axis=fix_axis,
                     quiet=args.quiet,
-                    contcar_name=f"CONTCAR-{prefix}",
-                    outcar_name=f"OUTCAR-{prefix}",
-                    xml_name=f"vasprun-{prefix}.xml",
-                    make_pdf=not args.no_pdf,  # <-- added
+                    contcar_name=os.path.join(output_dir, f"CONTCAR-{prefix}"),
+                    outcar_name=os.path.join(output_dir, f"OUTCAR-{prefix}"),
+                    xml_name=os.path.join(output_dir, f"vasprun-{prefix}.xml"),
+                    make_pdf=not args.no_pdf,
+                    write_json=args.pydefect,
                 )
-                print(f"✅ Finished {infile} → Results saved as CONTCAR-{prefix}, OUTCAR-{prefix}, vasprun-{prefix}.xml, relax-{prefix}_log.txt")
-                if not args.no_pdf:
-                    print(f"and relax-{prefix}_log.pdf")
+                results_path_info = f"in '{output_dir}'" if output_dir else "in the current directory"
+                print(f"✅ Finished {infile} → Results saved {results_path_info}")
                 print("-" * 80)
         except Exception as e:
             sys.stdout = orig_stdout
