@@ -274,7 +274,7 @@ def write_calc_results_json(atoms, energy, filename="calc_results.json"):
 def write_pydefect_dummy_files(output_dir="."):
     """Write dummy files for pydefect in a specified directory."""
     json_content = '{"@module":"pydefect.analyzer.band_edge_states","@class":"PerfectBandEdgeState","@version":"0.9.7","vbm_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"EdgeInfo","@version":"0.9.7","band_idx":0,"kpt_coord":[0.0,0.0,0.0],"orbital_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"OrbitalInfo","@version":"0.9.7","energy":0.0,"orbitals":{},"occupation":1.0,"participation_ratio":null}},"cbm_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"EdgeInfo","@version":"0.9.7","band_idx":0,"kpt_coord":[0.0,0.0,0.0],"orbital_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"OrbitalInfo","@version":"0.9.7","energy":5.0,"orbitals":{},"occupation":0.0,"participation_ratio":null}}}'
-    yaml_content = """system: ZnO
+    yaml_content = """system: Dummy
 vbm: 0.0
 cbm: 5.0
 ele_dielectric_const:
