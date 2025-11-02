@@ -9,9 +9,9 @@ Features:
   - Fixed-axis relaxation via --fix-axis
   - Batch mode: process multiple POSCAR-* files automatically
   - Outputs: CONTCAR-*, OUTCAR-*, vasprun-*.xml, relax-*_log.txt, relax-*_log.pdf
+  - Customizable output names via --contcar, --outcar, and --vasprun
   - Logs total energy, max force, and stress per step
   - Generates fully phonopy-compatible vasprun.xml
-  - Generates PyDefect-compatible 'calc_results.json' via --pydefect
 """
 from __future__ import annotations
 import argparse, sys, os, glob, numpy as np
@@ -271,6 +271,39 @@ def write_calc_results_json(atoms, energy, filename="calc_results.json"):
     print(f"🧩 Wrote {filename} (PyDefect-compatible)")
 
 
+def write_pydefect_dummy_files():
+    """Write dummy files for pydefect in the current directory."""
+    json_content = '{"@module":"pydefect.analyzer.band_edge_states","@class":"PerfectBandEdgeState","@version":"0.9.7","vbm_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"EdgeInfo","@version":"0.9.7","band_idx":0,"kpt_coord":[0.0,0.0,0.0],"orbital_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"OrbitalInfo","@version":"0.9.7","energy":0.0,"orbitals":{},"occupation":1.0,"participation_ratio":null}},"cbm_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"EdgeInfo","@version":"0.9.7","band_idx":0,"kpt_coord":[0.0,0.0,0.0],"orbital_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"OrbitalInfo","@version":"0.9.7","energy":5.0,"orbitals":{},"occupation":0.0,"participation_ratio":null}}}'
+    yaml_content = """system: ZnO
+vbm: 0.0
+cbm: 5.0
+ele_dielectric_const:
+- - 1.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 1.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 1.0
+ion_dielectric_const:
+- - 1.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 1.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 1.0
+"""
+    with open("perfect_band_edge_state.json", "w") as f:
+        f.write(json_content)
+    with open("unitcell.yaml", "w") as f:
+        f.write(yaml_content)
+
+
 # ============================================================
 # 5) Relaxation routine
 # ============================================================
@@ -380,17 +413,23 @@ if __name__ == "__main__":
 
     parser.add_argument("--input", "-i", type=str, nargs="+", default=["POSCAR"],
                         help="Input file(s) or pattern(s) (e.g. POSCAR-*).")
-    parser.add_argument("--fmax", type=float, default=0.01)
-    parser.add_argument("--smax", type=float, default=0.001)
+    parser.add_argument("--fmax", type=float, default=0.01, help="Force convergence threshold (eV/Å).")
+    parser.add_argument("--smax", type=float, default=0.001, help="Stress convergence threshold (eV/Å³).")
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "mps"])
     parser.add_argument("--isif", type=int, default=2, choices=list(range(8)))
     parser.add_argument("--fix-axis", type=str, default="")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--no-pdf", action="store_true", help="Disable log PDF output")
-    parser.add_argument("--pydefect", action="store_true", help="Write PyDefect-compatible calc_results.json")
+    parser.add_argument("--pydefect", action="store_true", help="Write PyDefect-compatible files (calc_results.json, unitcell.yaml, perfect_band_edge_state.json).")
+    parser.add_argument("--contcar", type=str, default=None, help="Output CONTCAR file name.")
+    parser.add_argument("--outcar", type=str, default=None, help="Output OUTCAR file name.")
+    parser.add_argument("--vasprun", type=str, default=None, help="Output vasprun.xml file name.")
 
     args = parser.parse_args()
     fix_axis = [ax.strip().lower() for ax in args.fix_axis.split(",") if ax.strip()]
+
+    if args.pydefect:
+        write_pydefect_dummy_files()
 
     input_patterns = args.input
     input_files = []
@@ -402,15 +441,26 @@ if __name__ == "__main__":
         print(f"❌ No files match pattern(s): {input_patterns}")
         sys.exit(1)
 
+    if (args.contcar or args.outcar or args.vasprun) and len(input_files) > 1:
+        print("⚠️ WARNING: Custom output names (--contcar, --outcar, --vasprun) are used with multiple input files.")
+        print("Output files may be overwritten. Consider running files one by one.")
+
     orig_stdout = sys.stdout
 
     for infile in input_files:
         prefix = os.path.basename(infile)
         output_dir = os.path.dirname(infile)
         log_name = os.path.join(output_dir, f"relax-{prefix}_log.txt")
+
+        contcar_name = os.path.join(output_dir, args.contcar or f"CONTCAR-{prefix}")
+        outcar_name = os.path.join(output_dir, args.outcar or f"OUTCAR-{prefix}")
+        xml_name = os.path.join(output_dir, args.vasprun or f"vasprun-{prefix}.xml")
+
         try:
             with Logger(log_name) as lg:
                 sys.stdout = lg
+                if args.pydefect:
+                    print("NOTE: perfect_band_edge_state.json and unitcell.yaml were written as dummy files for pydefect dei and pydefect des.")
                 print(f"▶ Using MACE on '{infile}' | ISIF={args.isif} | fmax={args.fmax} | smax={args.smax} | device={args.device}")
                 relax_structure(
                     input_file=infile,
@@ -420,9 +470,9 @@ if __name__ == "__main__":
                     isif=args.isif,
                     fix_axis=fix_axis,
                     quiet=args.quiet,
-                    contcar_name=os.path.join(output_dir, f"CONTCAR-{prefix}"),
-                    outcar_name=os.path.join(output_dir, f"OUTCAR-{prefix}"),
-                    xml_name=os.path.join(output_dir, f"vasprun-{prefix}.xml"),
+                    contcar_name=contcar_name,
+                    outcar_name=outcar_name,
+                    xml_name=xml_name,
                     make_pdf=not args.no_pdf,
                     write_json=args.pydefect,
                 )
