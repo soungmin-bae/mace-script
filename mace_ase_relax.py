@@ -271,8 +271,8 @@ def write_calc_results_json(atoms, energy, filename="calc_results.json"):
     print(f"🧩 Wrote {filename} (PyDefect-compatible)")
 
 
-def write_pydefect_dummy_files():
-    """Write dummy files for pydefect in the current directory."""
+def write_pydefect_dummy_files(output_dir="."):
+    """Write dummy files for pydefect in a specified directory."""
     json_content = '{"@module":"pydefect.analyzer.band_edge_states","@class":"PerfectBandEdgeState","@version":"0.9.7","vbm_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"EdgeInfo","@version":"0.9.7","band_idx":0,"kpt_coord":[0.0,0.0,0.0],"orbital_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"OrbitalInfo","@version":"0.9.7","energy":0.0,"orbitals":{},"occupation":1.0,"participation_ratio":null}},"cbm_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"EdgeInfo","@version":"0.9.7","band_idx":0,"kpt_coord":[0.0,0.0,0.0],"orbital_info":{"@module":"pydefect.analyzer.band_edge_states","@class":"OrbitalInfo","@version":"0.9.7","energy":5.0,"orbitals":{},"occupation":0.0,"participation_ratio":null}}}'
     yaml_content = """system: ZnO
 vbm: 0.0
@@ -298,9 +298,9 @@ ion_dielectric_const:
   - 0.0
   - 1.0
 """
-    with open("perfect_band_edge_state.json", "w") as f:
+    with open(os.path.join(output_dir, "perfect_band_edge_state.json"), "w") as f:
         f.write(json_content)
-    with open("unitcell.yaml", "w") as f:
+    with open(os.path.join(output_dir, "unitcell.yaml"), "w") as f:
         f.write(yaml_content)
 
 
@@ -428,9 +428,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     fix_axis = [ax.strip().lower() for ax in args.fix_axis.split(",") if ax.strip()]
 
-    if args.pydefect:
-        write_pydefect_dummy_files()
-
     input_patterns = args.input
     input_files = []
     for pat in input_patterns:
@@ -460,6 +457,7 @@ if __name__ == "__main__":
             with Logger(log_name) as lg:
                 sys.stdout = lg
                 if args.pydefect:
+                    write_pydefect_dummy_files(output_dir)
                     print("NOTE: perfect_band_edge_state.json and unitcell.yaml were written as dummy files for pydefect dei and pydefect des.")
                 print(f"▶ Using MACE on '{infile}' | ISIF={args.isif} | fmax={args.fmax} | smax={args.smax} | device={args.device}")
                 relax_structure(
